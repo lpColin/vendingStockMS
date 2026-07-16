@@ -1,0 +1,17 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using VendingStock.Api.Common;
+using VendingStock.Api.Contracts;
+using VendingStock.Api.Domain;
+using VendingStock.Api.Infrastructure;
+namespace VendingStock.Api.Controllers;
+[ApiController][Route("api/v1/product")]
+public sealed class ProductsController(VendingStockDbContext db):ControllerBase
+{
+ [HttpGet("list")] public async Task<ApiResponse> List([FromQuery]PageQuery q,[FromQuery]long? categoryId,[FromQuery]long? brandId,[FromQuery]string? keyword,CancellationToken ct){var query=db.Products.AsNoTracking().Include(x=>x.Spec).Include(x=>x.Brand).Include(x=>x.Category).AsQueryable();if(categoryId.HasValue)query=query.Where(x=>x.CategoryId==categoryId);if(brandId.HasValue)query=query.Where(x=>x.BrandId==brandId);if(!string.IsNullOrWhiteSpace(keyword))query=query.Where(x=>x.Name.Contains(keyword));var total=await query.CountAsync(ct);var list=await query.OrderByDescending(x=>x.Id).Skip(q.Skip).Take(q.Take).Select(x=>new{x.Id,x.Name,x.SpecId,SpecName=x.Spec.Name,x.BrandId,BrandName=x.Brand.Name,x.CategoryId,CategoryName=x.Category.Name,x.Price,x.Weight,x.ImageUrl}).ToListAsync(ct);return ApiResponse.Ok(new PagedResult<object>(list.Cast<object>().ToArray(),total,q.Page,q.Take));}
+ [HttpGet("{id:long}")] public async Task<ApiResponse> Get(long id,CancellationToken ct){var x=await db.Products.AsNoTracking().Include(x=>x.Spec).Include(x=>x.Brand).Include(x=>x.Category).SingleOrDefaultAsync(x=>x.Id==id,ct)??throw new BusinessException("商品不存在",4040);return ApiResponse.Ok(new{x.Id,x.Name,x.SpecId,SpecName=x.Spec.Name,x.BrandId,BrandName=x.Brand.Name,x.CategoryId,CategoryName=x.Category.Name,x.Price,x.Weight,x.ImageUrl});}
+ [HttpPost] public async Task<ApiResponse> Create(ProductRequest r,CancellationToken ct){await Validate(r,ct);if(await db.Products.AnyAsync(x=>x.Name==r.Name.Trim()&&x.SpecId==r.SpecId&&x.BrandId==r.BrandId,ct))throw new BusinessException("商品名称+规格+品牌已存在",4002);var x=new Product{Name=r.Name.Trim(),SpecId=r.SpecId,BrandId=r.BrandId,CategoryId=r.CategoryId,Price=r.Price,Weight=r.Weight,ImageUrl=r.ImageUrl};db.Products.Add(x);await db.SaveChangesAsync(ct);return ApiResponse.Ok(new{id=x.Id});}
+ [HttpPut("{id:long}")] public async Task<ApiResponse> Update(long id,ProductRequest r,CancellationToken ct){await Validate(r,ct);var x=await db.Products.FindAsync([id],ct)??throw new BusinessException("商品不存在",4040);if(await db.Products.AnyAsync(p=>p.Id!=id&&p.Name==r.Name.Trim()&&p.SpecId==r.SpecId&&p.BrandId==r.BrandId,ct))throw new BusinessException("商品名称+规格+品牌已存在",4002);x.Name=r.Name.Trim();x.SpecId=r.SpecId;x.BrandId=r.BrandId;x.CategoryId=r.CategoryId;x.Price=r.Price;x.Weight=r.Weight;x.ImageUrl=r.ImageUrl;await db.SaveChangesAsync(ct);return ApiResponse.Ok();}
+ [HttpDelete("{id:long}")] public async Task<ApiResponse> Delete(long id,CancellationToken ct){var x=await db.Products.FindAsync([id],ct)??throw new BusinessException("商品不存在",4040);db.Products.Remove(x);await db.SaveChangesAsync(ct);return ApiResponse.Ok();}
+ private async Task Validate(ProductRequest r,CancellationToken ct){if(string.IsNullOrWhiteSpace(r.Name)||r.Price<0||r.Weight<0)throw new BusinessException("商品参数不合法");if(!await db.ProductSpecs.AnyAsync(x=>x.Id==r.SpecId,ct)||!await db.ProductBrands.AnyAsync(x=>x.Id==r.BrandId,ct)||!await db.ProductCategories.AnyAsync(x=>x.Id==r.CategoryId,ct))throw new BusinessException("商品关联的分类、规格或品牌不存在");}
+}

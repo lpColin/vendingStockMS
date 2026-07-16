@@ -1,0 +1,21 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vending-stock-api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__MySql: Server=vending-mysql;Port=3306;Database=vending_stock;User=vending_app;Password=${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD is required}
+    ports:
+      - "127.0.0.1:5180:8080"
+    mem_limit: 400m
+    networks:
+      - vending_mysql_network
+
+networks:
+  vending_mysql_network:
+    external: true
+    name: mysql_default

@@ -1,0 +1,31 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using VendingStock.Api.Common;
+using VendingStock.Api.Contracts;
+using VendingStock.Api.Domain;
+using VendingStock.Api.Infrastructure;
+namespace VendingStock.Api.Controllers;
+[ApiController][Route("api/v1/daily-sales")]
+public sealed class DailySalesController(VendingStockDbContext db):ControllerBase
+{
+ [HttpGet("list")] public async Task<ApiResponse> List([FromQuery]PageQuery p,[FromQuery]long? machineId,[FromQuery]DateOnly? startDate,[FromQuery]DateOnly? endDate,CancellationToken ct){var q=db.DailySales.AsNoTracking().Include(x=>x.Machine).AsQueryable();if(machineId.HasValue)q=q.Where(x=>x.MachineId==machineId);if(startDate.HasValue)q=q.Where(x=>x.SalesDate>=startDate);if(endDate.HasValue)q=q.Where(x=>x.SalesDate<=endDate);var total=await q.CountAsync(ct);var list=await q.OrderByDescending(x=>x.SalesDate).Skip(p.Skip).Take(p.Take).Select(x=>new{x.Id,x.MachineId,MachineCode=x.Machine.MachineCode,x.SalesDate,x.TotalAmount}).ToListAsync(ct);return ApiResponse.Ok(new PagedResult<object>(list.Cast<object>().ToArray(),total,p.Page,p.Take));}
+ [HttpPost("sync")] public async Task<ApiResponse> Upsert(DailySalesRequest r,CancellationToken ct){if(r.TotalAmount<0||!await db.VendingMachines.AnyAsync(x=>x.Id==r.MachineId,ct))throw new BusinessException("销售数据参数不合法");var row=await db.DailySales.SingleOrDefaultAsync(x=>x.MachineId==r.MachineId&&x.SalesDate==r.SalesDate,ct);if(row is null){row=new DailySales{MachineId=r.MachineId,SalesDate=r.SalesDate,TotalAmount=r.TotalAmount};db.DailySales.Add(row);}else row.TotalAmount=r.TotalAmount;await db.SaveChangesAsync(ct);return ApiResponse.Ok(new{id=row.Id},"销售数据已同步");}
+}
+[ApiController][Route("api/v1/sys-config")]
+public sealed class SysConfigController(VendingStockDbContext db):ControllerBase
+{
+ [HttpGet("list")] public async Task<ApiResponse> List(CancellationToken ct)=>ApiResponse.Ok(await db.SysConfigs.AsNoTracking().OrderBy(x=>x.ConfigKey).Select(x=>new{x.Id,x.ConfigKey,x.ConfigValue,x.Description}).ToListAsync(ct));
+ [HttpPut] public async Task<ApiResponse> Update(SysConfigRequest r,CancellationToken ct){if(string.IsNullOrWhiteSpace(r.ConfigKey)||string.IsNullOrWhiteSpace(r.ConfigValue))throw new BusinessException("配置项不能为空");if(r.ConfigKey=="restock_threshold_percent"&&(!decimal.TryParse(r.ConfigValue,out var percent)||percent<0||percent>100))throw new BusinessException("补货阈值必须在 0 到 100 之间");var item=await db.SysConfigs.SingleOrDefaultAsync(x=>x.ConfigKey==r.ConfigKey,ct);if(item is null){item=new SysConfig{ConfigKey=r.ConfigKey,ConfigValue=r.ConfigValue,Description=r.Description};db.SysConfigs.Add(item);}else{item.ConfigValue=r.ConfigValue;item.Description=r.Description;}await db.SaveChangesAsync(ct);return ApiResponse.Ok();}
+}
+[ApiController][Route("api/v1/inventory-transaction")]
+public sealed class InventoryTransactionsController(VendingStockDbContext db):ControllerBase
+{
+ [HttpGet("list")] public async Task<ApiResponse> List([FromQuery]PageQuery p,[FromQuery]long? warehouseId,[FromQuery]long? productId,[FromQuery]InventoryTransactionType? transactionType,[FromQuery]DateTime? startTime,[FromQuery]DateTime? endTime,CancellationToken ct){var q=db.InventoryTransactions.AsNoTracking().AsQueryable();if(warehouseId.HasValue)q=q.Where(x=>x.WarehouseId==warehouseId);if(productId.HasValue)q=q.Where(x=>x.ProductId==productId);if(transactionType.HasValue)q=q.Where(x=>x.TransactionType==transactionType);if(startTime.HasValue)q=q.Where(x=>x.CreatedAt>=startTime);if(endTime.HasValue)q=q.Where(x=>x.CreatedAt<=endTime);var total=await q.CountAsync(ct);var list=await q.OrderByDescending(x=>x.Id).Skip(p.Skip).Take(p.Take).Select(x=>new{x.Id,x.TransactionType,x.WarehouseId,x.ProductId,x.QuantityChange,x.QuantityBefore,x.QuantityAfter,x.RelatedOrderNo,x.Remark,x.CreatedAt}).ToListAsync(ct);return ApiResponse.Ok(new PagedResult<object>(list.Cast<object>().ToArray(),total,p.Page,p.Take));}
+}
+[ApiController][Route("api/v1/dashboard")]
+public sealed class DashboardController(VendingStockDbContext db):ControllerBase
+{
+ [HttpGet("overview")] public async Task<ApiResponse> Overview(CancellationToken ct){var today=DateOnly.FromDateTime(DateTime.Today);var thresholdText=await db.SysConfigs.Where(x=>x.ConfigKey=="restock_threshold_percent").Select(x=>x.ConfigValue).SingleOrDefaultAsync(ct)??"50";var threshold=decimal.TryParse(thresholdText,out var v)?v:50;var machineProducts=db.MachineProducts.AsNoTracking();var lowStock=await machineProducts.CountAsync(x=>x.AllocationQuantity>0&&x.StockQuantity*100m/x.AllocationQuantity<threshold,ct);var todaySales=await db.DailySales.Where(x=>x.SalesDate==today).SumAsync(x=>(decimal?)x.TotalAmount,ct)??0;return ApiResponse.Ok(new{WarehouseCount=await db.Warehouses.CountAsync(ct),MachineCount=await db.VendingMachines.CountAsync(ct),PendingDeliveryCount=await db.DeliveryOrders.CountAsync(x=>x.Status==DeliveryOrderStatus.Pending,ct),UrgentRestockCount=lowStock,TodaySalesAmount=todaySales,LastGoodsSync=await db.SyncTaskLogs.Where(x=>x.TaskType=="GOODS_SYNC"&&x.Status==SyncTaskStatus.Success).OrderByDescending(x=>x.FinishedAt).Select(x=>x.FinishedAt).FirstOrDefaultAsync(ct)});}
+ [HttpGet("urgent-restock")] public async Task<ApiResponse> Urgent(CancellationToken ct){var t=await db.SysConfigs.Where(x=>x.ConfigKey=="restock_threshold_percent").Select(x=>x.ConfigValue).SingleOrDefaultAsync(ct)??"50";var threshold=decimal.TryParse(t,out var v)?v:50;var list=await db.MachineProducts.AsNoTracking().Where(x=>x.AllocationQuantity>0&&x.StockQuantity*100m/x.AllocationQuantity<threshold).Include(x=>x.Machine).Include(x=>x.Product).Select(x=>new{x.MachineId,MachineCode=x.Machine.MachineCode,x.ProductId,ProductName=x.Product.Name,x.StockQuantity,x.AllocationQuantity,SuggestedQuantity=x.AllocationQuantity-x.StockQuantity}).ToListAsync(ct);return ApiResponse.Ok(list);}
+ [HttpGet("pending-delivery-orders")] public async Task<ApiResponse> Pending(CancellationToken ct)=>ApiResponse.Ok(await db.DeliveryOrders.AsNoTracking().Where(x=>x.Status==DeliveryOrderStatus.Pending).Include(x=>x.Machine).OrderBy(x=>x.CreatedAt).Select(x=>new{x.Id,x.OrderNo,x.MachineId,MachineCode=x.Machine.MachineCode,x.CreatedAt}).ToListAsync(ct));
+}
