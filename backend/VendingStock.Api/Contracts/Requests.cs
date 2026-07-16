@@ -19,3 +19,5 @@ public sealed record CancelDeliveryOrderRequest(string Reason);
 
 public sealed record DailySalesRequest(long MachineId, DateOnly SalesDate, decimal TotalAmount);
 public sealed record SysConfigRequest(string ConfigKey, string ConfigValue, string? Description);
+
+public sealed record ExternalMachineImportRequest(string Payload);
