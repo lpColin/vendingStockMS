@@ -20,8 +20,9 @@ public sealed class GoodsSyncService(VendingStockDbContext db, IHttpClientFactor
             if (response.Code != 1 || response.Data is null) throw new BusinessException($"优宝商品接口返回失败：{response.Message ?? "未知错误"}", 4005);
             var sourceItems = response.Data.Where(x => x.SkuId > 0 && !string.IsNullOrWhiteSpace(x.SkuName)).GroupBy(x => x.SkuId).Select(x => x.Last()).ToArray();
             log.TotalCount = sourceItems.Length;
-            var skuIds = sourceItems.Select(x => x.SkuId).ToArray();
-            var existing = await db.ProductRaws.Where(x => skuIds.Contains(x.SkuId)).ToDictionaryAsync(x => x.SkuId, ct);
+            // Avoid translating an array Contains expression here. EF Core 9 on .NET 10 can
+            // fail while evaluating that parameter expression before the query is sent.
+            var existing = await db.ProductRaws.ToDictionaryAsync(x => x.SkuId, ct);
             foreach (var source in sourceItems) { if (!existing.TryGetValue(source.SkuId, out var entity)) { entity = new ProductRaw { SkuId = source.SkuId }; db.ProductRaws.Add(entity); } Map(source, entity); log.SuccessCount++; }
             log.Status = SyncTaskStatus.Success; log.FinishedAt = DateTime.Now; await db.SaveChangesAsync(ct);
             return new GoodsSyncResult(log.Id, log.TotalCount, log.SuccessCount, log.FailedCount, log.FinishedAt.Value);
