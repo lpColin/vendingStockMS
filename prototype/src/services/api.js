@@ -21,6 +21,10 @@ export const api = {
   syncLogs: (params = {}) => request('/api/v1/sync-task/log/list?' + query(params)),
   warehouseStocks: (params = {}) => request('/api/v1/warehouse-stock/list?' + query(params)),
   machines: (params = {}) => request('/api/v1/vending-machine/list?' + query(params)),
+  machine: (id) => request('/api/v1/vending-machine/' + id),
+  createMachine: (data) => request('/api/v1/vending-machine', { method: 'POST', body: JSON.stringify(data) }),
+  updateMachine: (id, data) => request('/api/v1/vending-machine/' + id, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteMachine: (id) => request('/api/v1/vending-machine/' + id, { method: 'DELETE' }),
   importExternalMachines: (payload) => request('/api/v1/vending-machine/import-external', { method: 'POST', body: JSON.stringify({ payload }) }),
   triggerGoodsSync: () => request('/api/v1/sync-task/goods/trigger', { method: 'POST' }),
 }
